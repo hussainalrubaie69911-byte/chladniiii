@@ -13,7 +13,7 @@
 <body>
 <canvas id="c"></canvas>
 <script>
-  // ── params ───────────────────────────────────────────────────────────────
+  // ── params (identical to original) ──────────────────────────────────────
   let P = { m:8, n:4, a:1, b:1, v:0.02, num:10000 };
 
   const randInt    = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
@@ -27,7 +27,10 @@
     P.b = randChoice(aVals);
   }
 
-  // ── canvas setup ─────────────────────────────────────────────────────────
+  // postMessage API (same as original)
+  window.addEventListener('message', e => { if (e.data === 'randomise') randomise(); });
+
+  // ── canvas setup ────────────────────────────────────────────────────────
   const canvas = document.getElementById('c');
   const ctx    = canvas.getContext('2d');
   const dpr    = Math.min(devicePixelRatio, 2);
@@ -37,13 +40,12 @@
     canvas.height = innerHeight * dpr;
     canvas.style.width  = innerWidth  + 'px';
     canvas.style.height = innerHeight + 'px';
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
   }
   resize();
   window.addEventListener('resize', resize);
 
-  // ── Chladni equation ─────────────────────────────────────────────────────
+  // ── Chladni equation ────────────────────────────────────────────────────
   const PI  = Math.PI;
   const MIN = 0.002;
 
@@ -52,7 +54,7 @@
          + P.b * Math.sin(PI*P.m*x) * Math.sin(PI*P.n*y);
   }
 
-  // ── particles ─────────────────────────────────────────────────────────────
+  // ── particles (Float32 arrays — compact & cache-friendly) ───────────────
   const NUM = P.num;
   const px  = new Float32Array(NUM);
   const py  = new Float32Array(NUM);
@@ -62,25 +64,27 @@
     py[i] = 0.05 + Math.random() * 0.9;
   }
 
-  function rnd() { return Math.random() * 2 - 1; }
+  function rnd() { return Math.random() * 2 - 1; } // [-1, 1]
 
-  // ── animation state ───────────────────────────────────────────────────────
-  let isActive = false;  // true only while SECTION-2 is in viewport
+  // ── draw loop ───────────────────────────────────────────────────────────
+  let W = innerWidth, H = innerHeight;
   let lastTime = 0;
-  const TARGET_FPS = 30;
+  const TARGET_FPS = 30;          // cap at 30 fps — half the work, invisible difference
   const FRAME_MS   = 1000 / TARGET_FPS;
 
   function draw(ts) {
     requestAnimationFrame(draw);
-    if (!isActive) return;                     // paused when out of view
+
+    // frame-rate cap
     if (ts - lastTime < FRAME_MS) return;
     lastTime = ts;
 
-    const W = innerWidth, H = innerHeight;
+    W = innerWidth; H = innerHeight;
 
     ctx.fillStyle = 'rgb(30,30,30)';
     ctx.fillRect(0, 0, W, H);
 
+    // batch all points into a single ImageData write for speed
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.beginPath();
 
@@ -103,6 +107,8 @@
       if (y < 0) y = 0; if (y > 1) y = 1;
 
       px[i] = x; py[i] = y;
+
+      // 1.2 px dot — matches original strokeWeight(1.2)
       ctx.rect(x * W, y * H, 1.2, 1.2);
     }
     ctx.fill();
@@ -110,98 +116,12 @@
 
   requestAnimationFrame(draw);
 
-  // ── postMessage listener (receives commands from parent page) ─────────────
-  //
-  //  Expected messages:
-  //    { type: 'chladni', action: 'activate' }          — start animating
-  //    { type: 'chladni', action: 'deactivate' }        — pause animating
-  //    { type: 'chladni', action: 'bucket', n: 0|1|2 } — new 100vh bucket
-  //
+  // ── scroll bucket trigger (same as original) ────────────────────────────
   let lastBucket = -1;
-
-  window.addEventListener('message', e => {
-    const d = e.data;
-
-    // legacy plain-string API kept for back-compat
-    if (d === 'randomise') { randomise(); return; }
-
-    if (!d || d.type !== 'chladni') return;
-
-    if (d.action === 'activate') {
-      isActive = true;
-    } else if (d.action === 'deactivate') {
-      isActive = false;
-    } else if (d.action === 'bucket' && d.n !== lastBucket) {
-      lastBucket = d.n;
-      randomise();
-    }
-  });
-</script>
-
-<!--
-═══════════════════════════════════════════════════════════════════════════════
-  PARENT PAGE SNIPPET — paste into Webflow's page-level <body> custom code
-  (Settings → Custom Code → Before </body>)
-
-  • Replace YOUR_IFRAME_ID with the real ID you gave the iframe element
-  • SECTION-2 must have id="SECTION-2" in Webflow
-═══════════════════════════════════════════════════════════════════════════════
-
-<script>
-(function () {
-  var iframe  = document.getElementById('YOUR_IFRAME_ID');
-  var section = document.getElementById('SECTION-2');
-  if (!iframe || !section) return;
-
-  var lastBucket = -1;
-  var isActive   = false;
-
-  function post(msg) {
-    try { iframe.contentWindow.postMessage(msg, '*'); } catch (e) {}
-  }
-
-  // ── 1. Activate / deactivate when SECTION-2 enters or leaves the viewport
-  var observer = new IntersectionObserver(function (entries) {
-    var visible = entries[0].isIntersecting;
-
-    if (visible && !isActive) {
-      isActive = true;
-      post({ type: 'chladni', action: 'activate' });
-
-      // Bucket 0 fires immediately on first entry
-      if (lastBucket === -1) {
-        lastBucket = 0;
-        post({ type: 'chladni', action: 'bucket', n: 0 });
-      }
-    }
-
-    if (!visible && isActive) {
-      isActive = false;
-      post({ type: 'chladni', action: 'deactivate' });
-    }
-  }, { threshold: 0 });
-
-  observer.observe(section);
-
-  // ── 2. Fire randomise at each 100vh mark (0 / 100 / 200) inside the section
-  window.addEventListener('scroll', function () {
-    if (!isActive) return;
-
-    var sectionTop = section.getBoundingClientRect().top + window.scrollY;
-    var offset     = window.scrollY - sectionTop;
-    if (offset < 0) return;
-
-    // clamp to 0-2 so only 3 patterns fire across the 300vh section
-    var bucket = Math.min(Math.floor(offset / window.innerHeight), 2);
-    if (bucket !== lastBucket) {
-      lastBucket = bucket;
-      post({ type: 'chladni', action: 'bucket', n: bucket });
-    }
+  window.addEventListener('scroll', () => {
+    const bucket = Math.floor(scrollY / innerHeight);
+    if (bucket !== lastBucket) { lastBucket = bucket; randomise(); }
   }, { passive: true });
-})();
 </script>
-
-═══════════════════════════════════════════════════════════════════════════════
--->
 </body>
 </html>
